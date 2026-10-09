@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PetaDF</title>
+    <style>
+      body { font-family: sans-serif; margin: 16px; }
+      #toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+      #hint { color: #667; font-size: 13px; margin-bottom: 8px; }
+      #status {
+        margin-bottom: 10px;
+        padding: 6px 10px;
+        background: #f1f4f8;
+        border-radius: 4px;
+        font-size: 13px;
+        color: #334;
+        min-height: 1em;
+      }
+      #stage {
+        position: relative;
+        display: inline-block;
+        border: 1px solid #ccc;
+        box-shadow: 0 1px 4px rgba(0,0,0,.15);
+      }
+      #pageCanvas { display: block; }
+      #overlayCanvas { position: absolute; left: 0; top: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="toolbar">
+        <input type="file" id="pdfInput" accept="application/pdf">
+        <input type="file" id="imageInput" accept="image/png,image/jpeg">
+        <button id="prevButton">前</button>
+        <span id="pageLabel">- / -</span>
+        <button id="nextButton">次</button>
+        <button id="deleteButton">削除</button>
+        <button id="exportButton">書き出し</button>
+      </div>
+      <div id="hint">ドラッグで移動 / 角をつかんでリサイズ / 矢印キーで微調整 (Shiftで10倍) / Delete で削除 / Ctrl+V で貼り付け</div>
+      <div id="status"></div>
+      <div id="stage">
+        <canvas id="pageCanvas"></canvas>
+        <canvas id="overlayCanvas"></canvas>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
