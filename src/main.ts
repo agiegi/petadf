@@ -1,3 +1,6 @@
+import monUrl from './oh-gy-mon.png?url'
+import pdfjsLicense from '../node_modules/pdfjs-dist/LICENSE?raw'
+import pdflibLicense from '../node_modules/pdf-lib/LICENSE.md?raw'
 import { PDFDocument, degrees } from 'pdf-lib'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
@@ -534,3 +537,45 @@ exportButton.addEventListener('click', async () => {
 })
 
 setStatus('PDF を選んでください')
+
+// --- About 画面 ---
+
+const VERSION = '0.1.0'
+
+const aboutButton = document.getElementById('aboutButton') as HTMLButtonElement
+const aboutBackdrop = document.getElementById('aboutBackdrop') as HTMLDivElement
+const aboutClose = document.getElementById('aboutClose') as HTMLButtonElement
+const aboutMon = document.getElementById('aboutMon') as HTMLImageElement
+
+aboutMon.src = monUrl
+;(document.getElementById('licPdfjs') as HTMLPreElement).textContent = pdfjsLicense
+;(document.getElementById('licPdflib') as HTMLPreElement).textContent = pdflibLicense
+;(document.getElementById('aboutVersion') as HTMLSpanElement).textContent = VERSION
+
+let aboutOpen = false
+
+function openAbout() {
+  aboutOpen = true
+  aboutBackdrop.classList.add('open')
+}
+
+function closeAbout() {
+  aboutOpen = false
+  aboutBackdrop.classList.remove('open')
+}
+
+aboutButton.addEventListener('click', openAbout)
+aboutClose.addEventListener('click', closeAbout)
+
+// 背景をクリックしたら閉じる。パネルの中は閉じない
+aboutBackdrop.addEventListener('click', ev => {
+  if (ev.target === aboutBackdrop) closeAbout()
+})
+
+// About が開いている間は, 矢印キーや Delete が配置に効かないようにする。
+// capture 段階で止めるので, 既存のキーボード処理に手を入れなくて済む
+window.addEventListener('keydown', ev => {
+  if (!aboutOpen) return
+  if (ev.key === 'Escape') closeAbout()
+  ev.stopPropagation()
+}, true)
