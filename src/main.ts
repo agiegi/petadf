@@ -34,15 +34,16 @@ const pileCount = el<HTMLSpanElement>('pileCount')
 
 // --- 定数 ---
 
-const HANDLE_PX = 10        // リサイズハンドルの辺 (px)
-const MIN_PT = 20           // 画像の最小サイズ (pt)
-const LOAD_MAX_EDGE = 3000  // 読み込み時の長辺上限 (px)
-const EXPORT_DPI = 200      // 書き出し時の解像度
+const HANDLE_PX = 10          // リサイズハンドルの辺 (CSS px)
+const MIN_PT = 20             // 画像の最小サイズ (pt)
+const LOAD_MAX_EDGE = 3000    // 読み込み時の長辺上限 (px)
+const EXPORT_DPI = 200        // 書き出し時の解像度
 const JPEG_QUALITY = 0.85
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.5, 2, 3]   // 1 = 全体が収まる状態
 const FIT_INDEX = 2
-const AREA_PAD = 56         // #sheetArea の padding 相当
+const AREA_PAD = 56           // #sheetArea の padding 相当
 const PT_TO_MM = 25.4 / 72
+const MAX_RENDER_SCALE = 4    // 表示pt -> 実ピクセル の上限。メモリの歯止め
 
 // --- 型 ---
 
@@ -77,7 +78,8 @@ let pageIndex = 0
 let pageCount = 0
 
 let zoomIdx = FIT_INDEX
-let viewScale = 1
+let viewScale = 1       // 表示pt -> CSS px
+let pixelRatio = 1      // CSS px -> canvas の実ピクセル
 let displayW = 0
 let displayH = 0
 
@@ -230,12 +232,14 @@ function fitScale(pw: number, ph: number) {
 }
 
 // --- マウス座標 -> 表示pt ---
+// rect は CSS px, viewScale も 表示pt -> CSS px なので, 実ピクセル数は関係ない
 
 function toDisplayPt(ev: MouseEvent) {
   const rect = overlay.getBoundingClientRect()
-  const px = (ev.clientX - rect.left) * (overlay.width / rect.width)
-  const py = (ev.clientY - rect.top) * (overlay.height / rect.height)
-  return { x: px / viewScale, y: py / viewScale }
+  return {
+    x: (ev.clientX - rect.left) / viewScale,
+    y: (ev.clientY - rect.top) / viewScale,
+  }
 }
 
 // --- 当たり判定 ---
@@ -275,7 +279,10 @@ function selected() {
 
 function drawOverlay() {
   const ctx = overlay.getContext('2d')!
-  ctx.clearRect(0, 0, overlay.width, overlay.height)
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, overlay.width, overlay.height)        // 実ピクセルで全消去
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)      // 以降は CSS px で描く
 
   for (const p of pagePlacements()) {
     const img = images.get(p.imageId)
@@ -382,17 +389,31 @@ async function renderPage() {
   const base = page.getViewport({ scale: 1 })
 
   viewScale = fitScale(base.width, base.height) * ZOOM_STEPS[zoomIdx]
-  const viewport = page.getViewport({ scale: viewScale })
+
+  // 画面の実ピクセル密度に合わせて描く。
+  // これをしないと canvas が CSS px のまま引き伸ばされて表示がぼやける。
+  // Windows の拡大縮小 125% なら devicePixelRatio は 1.25
+  const dpr = window.devicePixelRatio || 1
+  const renderScale = Math.min(viewScale * dpr, MAX_RENDER_SCALE)
+  pixelRatio = renderScale / viewScale
+
+  const viewport = page.getViewport({ scale: renderScale })
 
   displayW = base.width
   displayH = base.height
 
   const w = Math.floor(viewport.width)
   const h = Math.floor(viewport.height)
-  pageCanvas.width = w
-  pageCanvas.height = h
-  overlay.width = w
-  overlay.height = h
+  const cssW = Math.round(w / pixelRatio)
+  const cssH = Math.round(h / pixelRatio)
+
+  // width/height は実ピクセル数, style は画面上の大きさ
+  for (const cv of [pageCanvas, overlay]) {
+    cv.width = w
+    cv.height = h
+    cv.style.width = `${cssW}px`
+    cv.style.height = `${cssH}px`
+  }
 
   const ctx = pageCanvas.getContext('2d')!
   ctx.clearRect(0, 0, w, h)
@@ -690,7 +711,8 @@ zoomIn.addEventListener('click', () => setZoom(zoomIdx + 1))
 zoomOut.addEventListener('click', () => setZoom(zoomIdx - 1))
 zoomFit.addEventListener('click', () => setZoom(FIT_INDEX))
 
-// ウィンドウの大きさが変わると「収まる倍率」も変わるので描き直す
+// ウィンドウの大きさが変わると収まる倍率も変わる。
+// 別のモニタへ移して devicePixelRatio が変わったときもここで描き直る
 let resizeTimer = 0
 window.addEventListener('resize', () => {
   if (!pdfjsDoc) return
@@ -770,7 +792,7 @@ exportButton.addEventListener('click', async () => {
 
 // --- このツールについて ---
 
-const VERSION = '0.2.0'
+const VERSION = '0.2.1'
 
 const aboutButton = el<HTMLButtonElement>('aboutButton')
 const aboutBackdrop = el<HTMLDivElement>('aboutBackdrop')

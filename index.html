@@ -43,6 +43,11 @@
       * { box-sizing: border-box; }
       html, body { height: 100%; }
 
+      /* hidden 属性は [hidden]{display:none} で効くが, ID セレクタで
+         display を指定するとそちらが勝って消えなくなる。
+         #emptyState が display:flex なのでこれに当たっていた */
+      [hidden] { display: none !important; }
+
       body {
         margin: 0;
         display: flex;
@@ -189,7 +194,9 @@
         overflow: auto;
         padding: 26px;
         display: flex;
-        justify-content: center;
+        /* center だけだと, 拡大時に左へはみ出した分へスクロールで辿り着けない。
+           safe を付けると, 収まっているときは中央, はみ出したら左寄せになる */
+        justify-content: safe center;
         align-items: flex-start;
         background: radial-gradient(ellipse at 50% -10%, var(--mat) 0%, var(--mat-deep) 150%);
       }
