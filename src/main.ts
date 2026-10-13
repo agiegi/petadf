@@ -37,7 +37,7 @@ const pileCount = el<HTMLSpanElement>('pileCount')
 const HANDLE_PX = 10          // リサイズハンドルの辺 (CSS px)
 const MIN_PT = 20             // 画像の最小サイズ (pt)
 const LOAD_MAX_EDGE = 3000    // 読み込み時の長辺上限 (px)
-const EXPORT_DPI = 200        // 書き出し時の解像度
+const EXPORT_DPI = 300        // 書き出し時の解像度
 const JPEG_QUALITY = 0.85
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.5, 2, 3]   // 1 = 全体が収まる状態
 const FIT_INDEX = 2
