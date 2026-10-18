@@ -21,6 +21,8 @@ const zoomFit = el<HTMLButtonElement>('zoomFit')
 const zoomNow = el<HTMLSpanElement>('zoomNow')
 const peelButton = el<HTMLButtonElement>('peelButton')
 const exportButton = el<HTMLButtonElement>('exportButton')
+const addBlankButton = el<HTMLButtonElement>('addBlankButton')
+const dropBlankButton = el<HTMLButtonElement>('dropBlankButton')
 const statusLine = el<HTMLParagraphElement>('status')
 const sheetArea = el<HTMLDivElement>('sheetArea')
 const stage = el<HTMLDivElement>('stage')
@@ -56,10 +58,17 @@ type StoredImage = {
   thumbUrl: string
 }
 
+// ページは「元PDFのページ」か「追加した白紙」のどちらか。
+// 表示も書き出しも sheets の並び順で行うので, sheets の添字がそのまま
+// 書き出し後のページ番号になる。ページ番号で持つと挿入のたびにズレる
+type Sheet =
+  | { kind: 'src'; srcIndex: number }
+  | { kind: 'blank'; width: number; height: number }   // 表示pt (回転を適用した見た目の寸法)
+
 type Placement = {
   id: number
   imageId: number
-  pageIndex: number
+  sheetIndex: number      // sheets の添字。元PDFのページ番号ではない
   dx: number; dy: number; dw: number; dh: number   // 表示pt, 左上原点
 }
 
@@ -74,8 +83,9 @@ type Drag =
 let pdfData: ArrayBuffer | null = null
 let pdfName = 'output'
 let pdfjsDoc: pdfjsLib.PDFDocumentProxy | null = null
-let pageIndex = 0
-let pageCount = 0
+let sheets: Sheet[] = []
+let pageIndex = 0       // sheets の添字
+let pageCount = 0       // = sheets.length
 
 let zoomIdx = FIT_INDEX
 let viewScale = 1       // 表示pt -> CSS px
@@ -186,7 +196,7 @@ function addPlacement(img: StoredImage) {
   const p: Placement = {
     id: nextId++,
     imageId: img.id,
-    pageIndex,
+    sheetIndex: pageIndex,
     dx: (displayW - dw) / 2,
     dy: (displayH - dh) / 2,
     dw, dh,
@@ -268,7 +278,7 @@ function hitBody(p: Placement, x: number, y: number) {
 }
 
 function pagePlacements() {
-  return placements.filter(p => p.pageIndex === pageIndex)
+  return placements.filter(p => p.sheetIndex === pageIndex)
 }
 
 function selected() {
@@ -343,14 +353,14 @@ function drawList() {
     const size = document.createElement('span')
     size.className = 'size'
     size.textContent =
-      `${p.pageIndex + 1}ページ　${Math.round(p.dw * PT_TO_MM)}×${Math.round(p.dh * PT_TO_MM)}mm`
+      `${p.sheetIndex + 1}ページ　${Math.round(p.dw * PT_TO_MM)}×${Math.round(p.dh * PT_TO_MM)}mm`
     lines.append(name, size)
 
     btn.append(thumb, lines)
     btn.addEventListener('click', async () => {
       selectedId = p.id
-      if (p.pageIndex !== pageIndex) {
-        pageIndex = p.pageIndex
+      if (p.sheetIndex !== pageIndex) {
+        pageIndex = p.sheetIndex
         await renderPage()
       } else {
         redraw()
@@ -382,13 +392,27 @@ function redraw() {
   drawList()
 }
 
-async function renderPage() {
-  if (!pdfjsDoc) return
-
-  const page = await pdfjsDoc.getPage(pageIndex + 1)   // pdf.js は1始まり
+// ページの見た目の寸法 (表示pt)。
+// pdf.js の viewport は CropBox と /Rotate を適用済みなので, そのまま使える
+async function sheetSize(i: number): Promise<{ w: number; h: number }> {
+  const s = sheets[i]
+  if (s.kind === 'blank') return { w: s.width, h: s.height }
+  const page = await pdfjsDoc!.getPage(s.srcIndex + 1)      // pdf.js は1始まり
   const base = page.getViewport({ scale: 1 })
+  return { w: base.width, h: base.height }
+}
 
-  viewScale = fitScale(base.width, base.height) * ZOOM_STEPS[zoomIdx]
+async function renderPage() {
+  if (!pdfjsDoc || sheets.length === 0) return
+
+  const sheet = sheets[pageIndex]
+  const isBlank = sheet.kind === 'blank'
+
+  // 白紙は元PDFに存在しないので pdf.js には渡せない。塗るだけで済ませる
+  const page = sheet.kind === 'src' ? await pdfjsDoc.getPage(sheet.srcIndex + 1) : null
+  const { w: baseW, h: baseH } = await sheetSize(pageIndex)
+
+  viewScale = fitScale(baseW, baseH) * ZOOM_STEPS[zoomIdx]
 
   // 画面の実ピクセル密度に合わせて描く。
   // これをしないと canvas が CSS px のまま引き伸ばされて表示がぼやける。
@@ -397,13 +421,13 @@ async function renderPage() {
   const renderScale = Math.min(viewScale * dpr, MAX_RENDER_SCALE)
   pixelRatio = renderScale / viewScale
 
-  const viewport = page.getViewport({ scale: renderScale })
+  const viewport = page ? page.getViewport({ scale: renderScale }) : null
 
-  displayW = base.width
-  displayH = base.height
+  displayW = baseW
+  displayH = baseH
 
-  const w = Math.floor(viewport.width)
-  const h = Math.floor(viewport.height)
+  const w = Math.floor(viewport ? viewport.width : baseW * renderScale)
+  const h = Math.floor(viewport ? viewport.height : baseH * renderScale)
   const cssW = Math.round(w / pixelRatio)
   const cssH = Math.round(h / pixelRatio)
 
@@ -416,8 +440,16 @@ async function renderPage() {
   }
 
   const ctx = pageCanvas.getContext('2d')!
+  // pdf.js は render のたびに自前の transform を残すので, 白紙を塗る前に戻す
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, w, h)
-  await page.render({ canvas: pageCanvas, canvasContext: ctx, viewport }).promise
+
+  if (page && viewport) {
+    await page.render({ canvas: pageCanvas, canvasContext: ctx, viewport }).promise
+  } else {
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+  }
 
   pageNo.value = String(pageIndex + 1)
   pageTotal.textContent = String(pageCount)
@@ -426,9 +458,71 @@ async function renderPage() {
   zoomNow.textContent = `${Math.round(ZOOM_STEPS[zoomIdx] * 100)}%`
   zoomOut.disabled = zoomIdx <= 0
   zoomIn.disabled = zoomIdx >= ZOOM_STEPS.length - 1
+  addBlankButton.disabled = false
+  dropBlankButton.disabled = !isBlank      // 元のページは消せない
+
+  // canvas の中身は読み上げに乗らないので, 白紙であることは文字で出す
+  stage.setAttribute(
+    'aria-label',
+    isBlank
+      ? `${pageIndex + 1} ページ目 (追加した白紙)。画像をドラッグで動かし, 角をつかんで大きさを変えられます`
+      : 'ページの作業面。画像をドラッグで動かし, 角をつかんで大きさを変えられます',
+  )
 
   redraw()
 }
+
+// --- 白紙ページ ---
+// 元PDFを書き換えるのではなく sheets に差し込む。
+// 書き出すまで元のバイト列には一切触らない
+
+async function addBlank() {
+  if (!pdfjsDoc) return
+
+  // 隣のページと同じ見た目の寸法にする。
+  // 回転ページでも入れ替えた寸法が返るので, 白紙側の回転は常に0でよい。
+  // つまり placementToPdf は default の枝しか通らない
+  const { w, h } = await sheetSize(pageIndex)
+  const at = pageIndex + 1
+
+  sheets.splice(at, 0, { kind: 'blank', width: w, height: h })
+  for (const p of placements) if (p.sheetIndex >= at) p.sheetIndex++
+
+  pageCount = sheets.length
+  pageNo.max = String(pageCount)
+  pageIndex = at
+  selectedId = null
+
+  await renderPage()
+  setStatus(`${at + 1} ページ目に白紙を追加しました`)
+}
+
+async function dropBlank() {
+  const s = sheets[pageIndex]
+  if (!s || s.kind !== 'blank') return
+
+  const at = pageIndex
+  const lost = placements.filter(p => p.sheetIndex === at).length
+
+  sheets.splice(at, 1)
+  placements = placements.filter(p => p.sheetIndex !== at)
+  for (const p of placements) if (p.sheetIndex > at) p.sheetIndex--
+
+  pageCount = sheets.length
+  pageNo.max = String(pageCount)
+  pageIndex = Math.min(at, pageCount - 1)
+  selectedId = null
+
+  await renderPage()
+  setStatus(
+    lost > 0
+      ? `白紙ページを削除しました (貼ってあった画像 ${lost} 枚も外れました)`
+      : '白紙ページを削除しました',
+  )
+}
+
+addBlankButton.addEventListener('click', () => { void addBlank() })
+dropBlankButton.addEventListener('click', () => { void dropBlank() })
 
 // --- PDF を開く ---
 
@@ -439,7 +533,9 @@ async function acceptPdf(file: File) {
   // pdf.js は渡した ArrayBuffer を無効化するのでコピーを渡す
   pdfjsDoc = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise
 
-  pageCount = pdfjsDoc.numPages
+  // 最初は元PDFのページがそのまま並んでいる状態
+  sheets = Array.from({ length: pdfjsDoc.numPages }, (_, i): Sheet => ({ kind: 'src', srcIndex: i }))
+  pageCount = sheets.length
   pageIndex = 0
   zoomIdx = FIT_INDEX
   placements = []
@@ -452,6 +548,7 @@ async function acceptPdf(file: File) {
   pageNo.max = String(pageCount)
   zoomFit.disabled = false
   exportButton.disabled = false
+  addBlankButton.disabled = false
 
   await renderPage()
   setStatus(`${file.name} を開きました (${pageCount} ページ)。画像を貼ってください`)
@@ -601,7 +698,7 @@ function updateCursor(ev: MouseEvent) {
   const { x, y } = toDisplayPt(ev)
   const sel = selected()
 
-  if (sel && sel.pageIndex === pageIndex) {
+  if (sel && sel.sheetIndex === pageIndex) {
     const corner = hitCorner(sel, x, y)
     if (corner === 'nw' || corner === 'se') { overlay.style.cursor = 'nwse-resize'; return }
     if (corner === 'ne' || corner === 'sw') { overlay.style.cursor = 'nesw-resize'; return }
@@ -724,7 +821,12 @@ window.addEventListener('resize', () => {
 
 exportButton.addEventListener('click', async () => {
   if (!pdfData) { setStatus('PDF が開かれていません'); return }
-  if (placements.length === 0) { setStatus('貼った画像がありません'); return }
+
+  const blankCount = sheets.filter(s => s.kind === 'blank').length
+  if (placements.length === 0 && blankCount === 0) {
+    setStatus('貼った画像がありません')
+    return
+  }
 
   exportButton.disabled = true
   setStatus('書き出しています')
@@ -732,6 +834,14 @@ exportButton.addEventListener('click', async () => {
 
   try {
     const pdfDoc = await PDFDocument.load(pdfData)
+
+    // 白紙を前から順に差し込む。
+    // i 番目を入れる時点で i 未満は確定しているので, 添字がそのまま使える。
+    // 後ろから入れると, まだ入れていない前方の白紙の分だけ位置がずれる
+    for (let i = 0; i < sheets.length; i++) {
+      const s = sheets[i]
+      if (s.kind === 'blank') pdfDoc.insertPage(i, [s.width, s.height])
+    }
 
     // 同じ画像は1回だけ埋め込む。
     // 配置サイズが複数あるときは, 一番大きいものに合わせて解像度を決める
@@ -757,7 +867,8 @@ exportButton.addEventListener('click', async () => {
       const emb = embedded.get(p.imageId)
       if (!emb) continue
 
-      const page = pdfDoc.getPage(p.pageIndex)
+      // sheets の並び順 = 書き出し後のページ順なので, 添字をそのまま使える
+      const page = pdfDoc.getPage(p.sheetIndex)
       const crop = page.getCropBox()
       const rotation = normalizeRotation(page.getRotation().angle)
       const anchor = placementToPdf(p, crop, rotation)
@@ -782,7 +893,8 @@ exportButton.addEventListener('click', async () => {
 
     const ms = Math.round(performance.now() - t0)
     const mb = (blob.size / 1024 / 1024).toFixed(2)
-    setStatus(`out-${pdfName}.pdf を書き出しました (画像 ${placements.length} 枚 / ${mb} MB / ${ms} ms)`)
+    const added = blankCount > 0 ? ` / 白紙 ${blankCount} ページ` : ''
+    setStatus(`out-${pdfName}.pdf を書き出しました (画像 ${placements.length} 枚${added} / ${mb} MB / ${ms} ms)`)
   } catch (e) {
     setStatus('書き出しに失敗しました: ' + String(e))
   } finally {
@@ -792,7 +904,7 @@ exportButton.addEventListener('click', async () => {
 
 // --- このツールについて ---
 
-const VERSION = '0.2.1'
+const VERSION = '0.3.0'
 
 const aboutButton = el<HTMLButtonElement>('aboutButton')
 const aboutBackdrop = el<HTMLDivElement>('aboutBackdrop')
