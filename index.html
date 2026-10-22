@@ -223,9 +223,20 @@
         flex: none;
         background: var(--paper);
         box-shadow: 0 1px 3px rgba(0,0,0,.22), 0 14px 34px rgba(0,0,0,.20);
+        /* 長押しで選択ハンドルや「コピー」が出るのを止める */
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
       }
       #pageCanvas { display: block; }
-      #overlayCanvas { position: absolute; left: 0; top: 0; }
+
+      /* touch-action: none が無いと, 指のドラッグをブラウザがスクロールとして
+         持っていってしまい pointermove が届かない。奪った分の紙送りは
+         pointerdown の「何にも当たらなかった」側で自前でやる */
+      #overlayCanvas {
+        position: absolute; left: 0; top: 0;
+        touch-action: none;
+      }
       #stage:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 
       /* 何も開いていないときも同じ場所に同じ形の紙を置く。

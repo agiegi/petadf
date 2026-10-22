@@ -1,3 +1,4 @@
+import './compat'   // pdfjs より先に読む。import は書いた順に実行される
 import monUrl from './oh-gy-mon.png?url'
 import pdfjsLicense from '../node_modules/pdfjs-dist/LICENSE?raw'
 import pdflibLicense from '../node_modules/pdf-lib/LICENSE.md?raw'
@@ -36,7 +37,10 @@ const pileCount = el<HTMLSpanElement>('pileCount')
 
 // --- 定数 ---
 
-const HANDLE_PX = 10          // リサイズハンドルの辺 (CSS px)
+// 指で操作する端末ではハンドルを大きく描く。マウスなら従来どおり
+const COARSE_POINTER = matchMedia('(pointer: coarse)').matches
+const HANDLE_PX = COARSE_POINTER ? 16 : 10   // リサイズハンドルの辺 (CSS px)
+const TOUCH_GRAB_PX = 24      // 指で角をつかむときの当たり判定の半径 (CSS px)
 const MIN_PT = 20             // 画像の最小サイズ (pt)
 const LOAD_MAX_EDGE = 3000    // 読み込み時の長辺上限 (px)
 const EXPORT_DPI = 300        // 書き出し時の解像度
@@ -77,6 +81,8 @@ type Corner = 'nw' | 'ne' | 'sw' | 'se'
 type Drag =
   | { kind: 'move'; id: number; grabDx: number; grabDy: number }
   | { kind: 'resize'; id: number; corner: Corner; anchorX: number; anchorY: number; aspect: number }
+  // 何も掴まなかったときは紙送り。touch-action を切った分を自前で埋める
+  | { kind: 'pan'; startX: number; startY: number; scrollX: number; scrollY: number }
 
 // --- 状態 ---
 
@@ -263,8 +269,10 @@ function cornersOf(p: Placement) {
   }
 }
 
-function hitCorner(p: Placement, x: number, y: number): Corner | null {
-  const r = (HANDLE_PX / viewScale) * 0.8
+function hitCorner(p: Placement, x: number, y: number, pointerType = 'mouse'): Corner | null {
+  // 指は面で触れるので当たり判定だけ広げる。描く四角の大きさは変えない
+  const grab = pointerType === 'touch' ? TOUCH_GRAB_PX : HANDLE_PX * 0.8
+  const r = grab / viewScale
   const cs = cornersOf(p)
   for (const key of ['nw', 'ne', 'sw', 'se'] as Corner[]) {
     const c = cs[key]
@@ -622,9 +630,14 @@ window.addEventListener('drop', async ev => {
   }
 })
 
-// --- マウス操作 ---
+// --- ポインタ操作 ---
+// マウス・タッチ・ペンを1本の経路でさばく。
+// setPointerCapture を使うので, 指やカーソルが canvas の外へ出ても届き続ける。
+// 以前 window に付けていたのはそれを手でやっていたため
 
-overlay.addEventListener('mousedown', ev => {
+overlay.addEventListener('pointerdown', ev => {
+  if (ev.pointerType === 'mouse' && ev.button !== 0) return   // 左ボタンだけ
+
   const { x, y } = toDisplayPt(ev)
   const list = pagePlacements()
 
@@ -633,11 +646,13 @@ overlay.addEventListener('mousedown', ev => {
     const p = list[i]
 
     if (p.id === selectedId) {
-      const corner = hitCorner(p, x, y)
+      const corner = hitCorner(p, x, y, ev.pointerType)
       if (corner) {
         const opposite: Record<Corner, Corner> = { nw: 'se', ne: 'sw', sw: 'ne', se: 'nw' }
         const a = cornersOf(p)[opposite[corner]]
         drag = { kind: 'resize', id: p.id, corner, anchorX: a.x, anchorY: a.y, aspect: p.dw / p.dh }
+        overlay.setPointerCapture(ev.pointerId)
+        ev.preventDefault()
         return
       }
     }
@@ -645,22 +660,40 @@ overlay.addEventListener('mousedown', ev => {
     if (hitBody(p, x, y)) {
       selectedId = p.id
       drag = { kind: 'move', id: p.id, grabDx: x - p.dx, grabDy: y - p.dy }
+      overlay.setPointerCapture(ev.pointerId)
+      ev.preventDefault()
       redraw()
       return
     }
   }
 
+  // 何にも当たらなかった: 選択を外して, 紙を動かす側に回る
   selectedId = null
-  drag = null
+  drag = {
+    kind: 'pan',
+    startX: ev.clientX, startY: ev.clientY,
+    scrollX: sheetArea.scrollLeft, scrollY: sheetArea.scrollTop,
+  }
+  overlay.setPointerCapture(ev.pointerId)
   redraw()
 })
 
-// canvas に付けると, 速くドラッグして外へ出た瞬間に止まる。window に付ける
-window.addEventListener('mousemove', ev => {
-  if (!drag) { updateCursor(ev); return }
+overlay.addEventListener('pointermove', ev => {
+  if (!drag) {
+    if (ev.pointerType === 'mouse') updateCursor(ev)
+    return
+  }
+  ev.preventDefault()
+
+  if (drag.kind === 'pan') {
+    sheetArea.scrollLeft = drag.scrollX - (ev.clientX - drag.startX)
+    sheetArea.scrollTop  = drag.scrollY - (ev.clientY - drag.startY)
+    return
+  }
 
   const { x, y } = toDisplayPt(ev)
-  const p = placements.find(q => q.id === drag!.id)
+  const dragId = drag.id        // 閉包の中では絞り込みが効かないので先に取る
+  const p = placements.find(q => q.id === dragId)
   if (!p) return
 
   if (drag.kind === 'move') {
@@ -686,9 +719,17 @@ window.addEventListener('mousemove', ev => {
   drawOverlay()
 })
 
-window.addEventListener('mouseup', () => {
-  if (drag) { drag = null; drawList() }
-})
+// pointercancel を拾わないと, システムのジェスチャに取られたとき掴んだままになる
+function endPointer(ev: PointerEvent) {
+  if (!drag) return
+  const moved = drag.kind !== 'pan'
+  drag = null
+  if (overlay.hasPointerCapture(ev.pointerId)) overlay.releasePointerCapture(ev.pointerId)
+  if (moved) drawList()
+}
+
+overlay.addEventListener('pointerup', endPointer)
+overlay.addEventListener('pointercancel', endPointer)
 
 function updateCursor(ev: MouseEvent) {
   const rect = overlay.getBoundingClientRect()
@@ -889,7 +930,9 @@ exportButton.addEventListener('click', async () => {
     a.href = url
     a.download = `out-${pdfName}.pdf`
     a.click()
-    URL.revokeObjectURL(url)
+    // すぐ revoke すると, ダウンロードが始まる前に URL が死んで
+    // 保存が取り消される端末がある (iOS の Safari で起きやすい)
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
 
     const ms = Math.round(performance.now() - t0)
     const mb = (blob.size / 1024 / 1024).toFixed(2)
