@@ -49,6 +49,7 @@ const ZOOM_STEPS = [0.5, 0.75, 1, 1.5, 2, 3]   // 1 = 全体が収まる状態
 const FIT_INDEX = 2
 const AREA_PAD = 56           // #sheetArea の padding 相当
 const PT_TO_MM = 25.4 / 72
+const A4_PT = { w: 595.28, h: 841.89 }   // 何も開いていないときに作る白紙の大きさ
 const MAX_RENDER_SCALE = 4    // 表示pt -> 実ピクセル の上限。メモリの歯止め
 
 // --- 型 ---
@@ -213,8 +214,8 @@ function addPlacement(img: StoredImage) {
 }
 
 async function acceptImage(blob: Blob) {
-  if (!pdfjsDoc) {
-    setStatus('先に PDF を開いてください')
+  if (sheets.length === 0) {
+    setStatus('先に PDF を開くか,「白紙を追加」で始めてください')
     return
   }
   const img = await normalizeImage(blob)
@@ -411,13 +412,13 @@ async function sheetSize(i: number): Promise<{ w: number; h: number }> {
 }
 
 async function renderPage() {
-  if (!pdfjsDoc || sheets.length === 0) return
+  if (sheets.length === 0) return
 
   const sheet = sheets[pageIndex]
   const isBlank = sheet.kind === 'blank'
 
   // 白紙は元PDFに存在しないので pdf.js には渡せない。塗るだけで済ませる
-  const page = sheet.kind === 'src' ? await pdfjsDoc.getPage(sheet.srcIndex + 1) : null
+  const page = sheet.kind === 'src' ? await pdfjsDoc!.getPage(sheet.srcIndex + 1) : null
   const { w: baseW, h: baseH } = await sheetSize(pageIndex)
 
   viewScale = fitScale(baseW, baseH) * ZOOM_STEPS[zoomIdx]
@@ -485,7 +486,25 @@ async function renderPage() {
 // 書き出すまで元のバイト列には一切触らない
 
 async function addBlank() {
-  if (!pdfjsDoc) return
+  // 何も開いていないなら, A4縦の白紙1枚から始める。
+  // 画像だけをPDFにしたいとき, 元のPDFが無いことがある
+  if (sheets.length === 0) {
+    pdfData = null        // 読み込みに失敗した残骸が居座らないように
+    pdfjsDoc = null
+    pdfName = 'petadf'
+    sheets = [{ kind: 'blank', width: A4_PT.w, height: A4_PT.h }]
+    pageCount = 1
+    pageIndex = 0
+    zoomIdx = FIT_INDEX
+    placements = []
+    images.clear()
+    selectedId = null
+
+    openDocument()
+    await renderPage()
+    setStatus('白紙から始めます。画像を貼ってください')
+    return
+  }
 
   // 隣のページと同じ見た目の寸法にする。
   // 回転ページでも入れ替えた寸法が返るので, 白紙側の回転は常に0でよい。
@@ -534,6 +553,17 @@ dropBlankButton.addEventListener('click', () => { void dropBlank() })
 
 // --- PDF を開く ---
 
+// 画面を「作業中」に切り替える。PDFを開いたときと白紙から始めたときで共通
+function openDocument() {
+  emptyState.hidden = true
+  stage.hidden = false
+  pageNo.disabled = false
+  pageNo.max = String(pageCount)
+  zoomFit.disabled = false
+  exportButton.disabled = false
+  addBlankButton.disabled = false
+}
+
 async function acceptPdf(file: File) {
   pdfData = await file.arrayBuffer()
   pdfName = file.name.replace(/\.pdf$/i, '')
@@ -550,13 +580,7 @@ async function acceptPdf(file: File) {
   images.clear()
   selectedId = null
 
-  emptyState.hidden = true
-  stage.hidden = false
-  pageNo.disabled = false
-  pageNo.max = String(pageCount)
-  zoomFit.disabled = false
-  exportButton.disabled = false
-  addBlankButton.disabled = false
+  openDocument()
 
   await renderPage()
   setStatus(`${file.name} を開きました (${pageCount} ページ)。画像を貼ってください`)
@@ -853,7 +877,7 @@ zoomFit.addEventListener('click', () => setZoom(FIT_INDEX))
 // 別のモニタへ移して devicePixelRatio が変わったときもここで描き直る
 let resizeTimer = 0
 window.addEventListener('resize', () => {
-  if (!pdfjsDoc) return
+  if (sheets.length === 0) return
   window.clearTimeout(resizeTimer)
   resizeTimer = window.setTimeout(() => { void renderPage() }, 150)
 })
@@ -861,7 +885,7 @@ window.addEventListener('resize', () => {
 // --- 書き出し ---
 
 exportButton.addEventListener('click', async () => {
-  if (!pdfData) { setStatus('PDF が開かれていません'); return }
+  if (sheets.length === 0) { setStatus('まだ何も開かれていません'); return }
 
   const blankCount = sheets.filter(s => s.kind === 'blank').length
   if (placements.length === 0 && blankCount === 0) {
@@ -874,7 +898,8 @@ exportButton.addEventListener('click', async () => {
   const t0 = performance.now()
 
   try {
-    const pdfDoc = await PDFDocument.load(pdfData)
+    // 元PDFがあればその上に, 無ければ空のPDFに白紙を並べる
+    const pdfDoc = pdfData ? await PDFDocument.load(pdfData) : await PDFDocument.create()
 
     // 白紙を前から順に差し込む。
     // i 番目を入れる時点で i 未満は確定しているので, 添字がそのまま使える。

@@ -8,7 +8,7 @@
     <meta name="theme-color" content="#1b5fbf" />
 
     <title>PetaDF — 課題のPDFに画像をそのまま貼る</title>
-    <meta name="description" content="課題のPDFに画像を貼って提出できる形にします。印刷もスキャンもしません。ファイルはどこにも送られません。" />
+    <meta name="description" content="課題のPDFに画像を貼って, 提出できる形にします。PDFも画像もブラウザの外に出ません。一度開けば, 通信を切っても使えます。" />
 
     <!-- リンクを貼ったときのカード。og:image は絶対URLでないと効かない -->
     <meta property="og:type" content="website" />
@@ -16,7 +16,7 @@
     <meta property="og:site_name" content="PetaDF" />
     <meta property="og:locale" content="ja_JP" />
     <meta property="og:title" content="PetaDF — 課題のPDFに画像をそのまま貼る" />
-    <meta property="og:description" content="印刷もスキャンもしない。ブラウザで開いてドラッグするだけ。PDFも画像もどこにも送られません。" />
+    <meta property="og:description" content="開いてドラッグするだけ。PDFも画像もブラウザの外に出ません。一度開けば, 通信を切っても使えます。" />
     <meta property="og:image" content="https://petadf.oh-gy.com/ogp.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -162,7 +162,11 @@
         padding: 0 18px;
       }
       @media (prefers-color-scheme: dark) { .btn.go { color: #0f1419; } }
-      .btn.go:hover:not(:disabled) { filter: brightness(1.08); }
+      /* .btn:hover:not(:disabled) は :not() の分だけ詳細度が高く .btn.go に勝つ。
+         背景をここで指定し直さないと, 淡い青地に白文字になって字が消える */
+      .btn.go:hover:not(:disabled) {
+        background: var(--blue); border-color: var(--blue); filter: brightness(1.08);
+      }
 
       /* file input は隠すが生かす。ラベルの文字がそのまま名前になる */
       .pick { position: relative; }
@@ -462,7 +466,7 @@
       </div>
 
       <div class="set">
-        <button type="button" id="addBlankButton" class="btn" disabled>白紙を追加</button>
+        <button type="button" id="addBlankButton" class="btn">白紙を追加</button>
         <button type="button" id="dropBlankButton" class="btn" disabled>白紙を削除</button>
       </div>
 
@@ -488,7 +492,7 @@
       <div id="sheetArea" tabindex="-1">
         <div id="emptyState">
           <span class="lead">課題の PDF をここに置く</span>
-          <span class="sub">「PDF を開く」から選んでも構いません</span>
+          <span class="sub">「PDF を開く」から選ぶか,「白紙を追加」で始めることもできます</span>
           <span class="note">ファイルは外に出ません。<br>読み込みも書き出しも, ぜんぶこのブラウザの中で終わります</span>
         </div>
 
