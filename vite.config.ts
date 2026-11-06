@@ -1,7 +1,12 @@
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
+// About に出すバージョン。package.json と二重に持たないよう, ここで埋め込む
+import pkg from './package.json'
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
